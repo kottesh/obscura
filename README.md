@@ -269,6 +269,28 @@ obscurad [flags]
 The server derives every caller's identity from the authenticated SSH key, accepts
 only Ed25519 keys, allocates no PTY, spawns no shell, and enables no forwarding.
 
+## NixOS / Nix (flake)
+
+A `flake.nix` provides a Go dev shell and package builds. On a Nix machine (e.g.
+`relic-1`) with flakes enabled:
+
+```sh
+nix develop            # dev shell with go, gopls, staticcheck, just, delve
+just build             # then build as usual inside the shell
+
+nix run .#obscura -- address        # run the client without a manual build
+nix run .#obscurad -- -addr :2222   # run the server
+nix build .#obscura                 # -> result/bin/obscura
+```
+
+The dev shell (`nix develop`) needs no extra setup. Building the package with
+`nix build`/`nix run` needs the Go module `vendorHash` in `flake.nix`: run the
+command once, and Nix will fail printing the correct `got: sha256-...` — paste
+that into `flake.nix` (`vendorHash`) and rerun. Alternatively run `go mod vendor`
+in the source tree and set `vendorHash = null;`.
+
+Go 1.26 (required by `go.mod`) is on `nixpkgs-unstable`, which the flake pins.
+
 ## Development
 
 ```sh
