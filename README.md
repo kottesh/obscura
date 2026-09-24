@@ -26,7 +26,8 @@ internal/...    crypto, package format, PNG, storage, SSH routing, CLI rendering
 
 ## Requirements
 
-- Go 1.24+ (uses standard-library `crypto/ecdh` and `crypto/hkdf`).
+- Go 1.26+ (uses standard-library `crypto/ecdh` and `crypto/hkdf`; the maintained
+  SQLite and x/crypto/x/sys dependencies set the 1.26 floor).
 
 ## Status
 
