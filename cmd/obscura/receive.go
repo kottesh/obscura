@@ -22,16 +22,22 @@ import (
 // starts with the pkgfmt magic "OBSC".
 var pngSignature = []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a}
 
-// cmdReceive implements 'obscura receive <file_id> [-o <path>]' (spec 7, 14).
-// It downloads the encrypted content, detects PNG vs raw package, extracts if
-// needed, decrypts and verifies locally, then writes the plaintext. Plaintext
+// cmdReceive implements 'obscura receive <file_id> [-o <path>] [--raw]' (spec 7,
+// 14). It downloads the encrypted content, detects PNG vs raw package, extracts
+// if needed, decrypts and verifies locally, then writes the plaintext. Plaintext
 // is committed only after authentication, bounded decompression, and BLAKE3
 // verification succeed. Without -o the bytes go to stdout only when stdout is
 // not a TTY; on a TTY -o is required so binary bytes never hit a terminal.
+//
+// With --raw it instead writes the stored bytes verbatim (the encrypted package
+// or stego PNG exactly as held by the server) and performs no extraction,
+// decryption, or verification — useful for archiving or offline inspection.
 func cmdReceive(ctx context.Context, env *cmdEnv, args []string) error {
 	fs := newFlagSet("receive")
 	var out string
+	var raw bool
 	fs.StringVar(&out, "o", "", "output path (default: stdout when not a TTY)")
+	fs.BoolVar(&raw, "raw", false, "write the stored encrypted bytes verbatim; no decrypt/verify")
 	if err := parseCmd(fs, args, 1, 1); err != nil {
 		return err
 	}
@@ -43,7 +49,7 @@ func cmdReceive(ctx context.Context, env *cmdEnv, args []string) error {
 	if out == "" && env.g.mode == modeJSON() {
 		// JSON receive reports metadata only and cannot carry binary plaintext
 		// on stdout; require -o up front before any download/decrypt work.
-		return usagef("receive: --json requires -o <path> for the decrypted bytes")
+		return usagef("receive: --json requires -o <path> for the output bytes")
 	}
 
 	self, err := keystore.Load(env.g.configDir)
@@ -70,6 +76,11 @@ func cmdReceive(ctx context.Context, env *cmdEnv, args []string) error {
 		return err
 	}
 
+	// --raw: emit the stored bytes verbatim, skipping extract/decrypt/verify.
+	if raw {
+		return writeReceived(env, fileID, out, dl.Bytes(), true)
+	}
+
 	pkg, err := extractPackage(env, self.BoxPriv, dl.Bytes())
 	if err != nil {
 		return err
@@ -88,9 +99,18 @@ func cmdReceive(ctx context.Context, env *cmdEnv, args []string) error {
 	env.r.Crypto("Authenticated", "Poly1305 tag verified")
 	env.r.Crypto("Verifying", "BLAKE3 matched")
 
+	return writeReceived(env, fileID, out, plaintext, false)
+}
+
+// writeReceived commits received bytes to the chosen sink honoring stream
+// discipline: one JSON object (with -o) in JSON mode, raw bytes to a non-TTY
+// stdout when no -o, or an atomic file write. raw reports whether the bytes are
+// the stored ciphertext (true) or recovered plaintext (false), which only
+// affects the human/JSON labels.
+func writeReceived(env *cmdEnv, fileID, out string, data []byte, raw bool) error {
 	if env.g.mode == modeJSON() {
-		// JSON receive reports metadata only; -o was validated up front.
-		if err := writeAtomic(out, plaintext); err != nil {
+		// -o was validated up front in JSON mode.
+		if err := writeAtomic(out, data); err != nil {
 			return err
 		}
 		return writeJSON(env.stdout, map[string]any{
@@ -98,23 +118,29 @@ func cmdReceive(ctx context.Context, env *cmdEnv, args []string) error {
 			"command": "receive",
 			"file_id": fileID,
 			"path":    out,
-			"size":    len(plaintext),
+			"size":    len(data),
+			"raw":     raw,
 		})
 	}
 
+	title := "File recovered"
+	if raw {
+		title = "Stored bytes saved"
+	}
+
 	if out == "" {
-		// Non-TTY stdout: emit raw plaintext bytes with no decoration.
-		if _, err := env.stdout.Write(plaintext); err != nil {
+		// Non-TTY stdout: emit bytes with no decoration.
+		if _, err := env.stdout.Write(data); err != nil {
 			return err
 		}
-		env.r.Success("File recovered", "written to stdout")
+		env.r.Success(title, "written to stdout")
 		return nil
 	}
 
-	if err := writeAtomic(out, plaintext); err != nil {
+	if err := writeAtomic(out, data); err != nil {
 		return err
 	}
-	env.r.Success("File recovered", cleanPath(out))
+	env.r.Success(title, cleanPath(out))
 	return nil
 }
 

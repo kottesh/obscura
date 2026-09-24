@@ -243,6 +243,61 @@ func TestRunPNGRoundTrip(t *testing.T) {
 	}
 }
 
+// TestRunReceiveRaw verifies that receive --raw writes the stored bytes verbatim
+// (the stego PNG here) without decrypting, so the output is the PNG carrier, not
+// the plaintext.
+func TestRunReceiveRaw(t *testing.T) {
+	server, hostKey := testServer(t)
+
+	dirA, _ := initIdentity(t, server, hostKey)
+	dirB, addrB := initIdentity(t, server, hostKey)
+
+	content := bytes.Repeat([]byte("raw-download-payload\x00\xff"), 40)
+	src := filepath.Join(t.TempDir(), "raw-source.bin")
+	if err := os.WriteFile(src, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	sendRes := runCLI(t, server, hostKey, nil,
+		"--config-dir", dirA, "send", src, "--to", addrB, "--png")
+	if sendRes.code != exitOK {
+		t.Fatalf("send --png exit=%d stderr=%s", sendRes.code, sendRes.stderr)
+	}
+	fileID := strings.TrimSpace(sendRes.stdout)
+
+	outPath := filepath.Join(t.TempDir(), "raw-download.bin")
+	recvRes := runCLI(t, server, hostKey, nil,
+		"--config-dir", dirB, "receive", fileID, "-o", outPath, "--raw")
+	if recvRes.code != exitOK {
+		t.Fatalf("receive --raw exit=%d stderr=%s", recvRes.code, recvRes.stderr)
+	}
+	got, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// --raw returns the stored stego PNG, not the plaintext.
+	if !bytes.HasPrefix(got, pngSignature) {
+		t.Fatalf("raw output is not a PNG carrier (first bytes: %x)", got[:min(8, len(got))])
+	}
+	if bytes.Equal(got, content) {
+		t.Fatal("raw output equals plaintext; it should be the encrypted carrier")
+	}
+
+	// The same file received normally (no --raw) must still recover the plaintext.
+	plainPath := filepath.Join(t.TempDir(), "raw-recovered.bin")
+	if r := runCLI(t, server, hostKey, nil,
+		"--config-dir", dirB, "receive", fileID, "-o", plainPath); r.code != exitOK {
+		t.Fatalf("normal receive after raw exit=%d stderr=%s", r.code, r.stderr)
+	}
+	plain, err := os.ReadFile(plainPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(plain, content) {
+		t.Fatal("normal receive after raw did not recover plaintext")
+	}
+}
+
 // TestRunReceiveToStdout verifies that receive with no -o writes byte-exact
 // plaintext to stdout (non-TTY, simulated by a bytes.Buffer) with no card
 // decoration mixed into the binary stream.

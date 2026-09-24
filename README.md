@@ -183,7 +183,7 @@ Commands:
   address                                print this identity's public address
   send <path> --to <address> [--name <name>] [--png]
   list [--sent | --received]             list accessible server file records
-  receive <file_id> [-o <path>]          download, decrypt, and verify a file
+  receive <file_id> [-o <path>] [--raw]  download, decrypt, and verify a file (--raw: stored bytes verbatim)
   delete <file_id>                       delete an owned server record
   inspect <package_or_png>               show non-secret metadata for a local file
   config [set <key> <value>]             show or edit the config file

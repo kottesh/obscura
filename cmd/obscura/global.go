@@ -32,7 +32,7 @@ Commands:
   send <path> --to <address> [--name <name>] [--png]
                                          encrypt and upload a file
   list [--sent | --received]             list accessible server file records
-  receive <file_id> [-o <path>]          download, decrypt, and verify a file
+  receive <file_id> [-o <path>] [--raw]  download, decrypt, and verify a file (--raw: stored bytes verbatim)
   delete <file_id>                       delete an owned server record
   inspect <package_or_png>               show non-secret metadata for a local file
 
