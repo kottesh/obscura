@@ -44,6 +44,12 @@ check: build lint test
 run-server addr=":2222" db="obscura.db" host_key="obscura_host_ed25519":
     go run ./cmd/obscurad -addr {{addr}} -db {{db}} -host-key {{host_key}}
 
+# Print the pinned host public key line for a host key PEM (default
+# ./obscura_host_ed25519). Clients pass this to --host-key / 'config set host_key'.
+hostkey path="obscura_host_ed25519":
+    @test -f "{{path}}" || (echo "no host key at {{path}}; start the server once to generate it" && exit 1)
+    @go run ./tools/hostpub "{{path}}"
+
 # Print the obscura CLI help.
 help:
     go run ./cmd/obscura help
@@ -53,34 +59,3 @@ clean:
     rm -rf {{bin}}
     rm -f obscura.db obscura.db-shm obscura.db-wal
     rm -f obscura_host_ed25519 obscura_host_ed25519.pub
-
-# ---- Apple container (macOS) ----
-
-image := "obscura/obscurad:dev"
-data  := justfile_directory() / ".container-data"
-
-# Build the obscurad server image with Apple's `container` CLI.
-# Requires: container system start (kernel + Rosetta-disabled builder, see README).
-container-build:
-    container build --tag {{image}} --file Dockerfile .
-
-# Run the server container detached, publishing :2222 and persisting state under
-# ./.container-data (SQLite DB + generated host key survive restarts).
-container-run: container-build
-    mkdir -p "{{data}}"
-    container run -d --name obscurad -p 2222:2222 -v "{{data}}":/data {{image}}
-    @container list | grep obscurad || true
-
-# Tail the server container logs.
-container-logs:
-    container logs -f obscurad
-
-# Print the pinned host public key line clients need for --host-key.
-container-hostkey:
-    @test -f "{{data}}/obscura_host_ed25519" || (echo "no host key yet; run 'just container-run' first" && exit 1)
-    @go run ./tools/hostpub "{{data}}/obscura_host_ed25519"
-
-# Stop and remove the server container (state under ./.container-data is kept).
-container-stop:
-    -container stop obscurad
-    -container rm obscurad

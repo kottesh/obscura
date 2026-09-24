@@ -47,55 +47,6 @@ go build -o bin/obscura  ./cmd/obscura
 go build -o bin/obscurad ./cmd/obscurad
 ```
 
-## Run the server in a container (macOS)
-
-The server ships as a static, cgo-free Linux binary in a `scratch` image, built and
-run with [Apple's `container` CLI](https://github.com/apple/container).
-
-One-time setup:
-
-```sh
-# Start the container system (installs a Linux kernel on first run).
-container system start
-
-# Disable the Rosetta-backed builder shim (see apple/container#103), then restart.
-mkdir -p ~/.config/container
-printf '[build]\nrosetta = false\n' >> ~/.config/container/config.toml
-container system stop && container system start
-```
-
-Build and run:
-
-```sh
-just container-build     # build obscura/obscurad:dev
-just container-run       # run detached, publish :2222, persist ./.container-data
-just container-logs      # follow logs
-just container-stop      # stop + remove (state under ./.container-data is kept)
-```
-
-The SQLite database and the generated Ed25519 host key live on the mounted volume
-(`./.container-data`), so they survive container restarts. Print the host key line
-clients need to pin:
-
-```sh
-just container-hostkey   # -> ssh-ed25519 AAAA... (pass to --host-key)
-```
-
-Point a client at the container (use the container's IP from `container list`, or a
-published host address):
-
-```sh
-obscura --server <container-ip>:2222 --host-key "$(just container-hostkey)" \
-  --config-dir ~/.config/obscura-send send ./report.pdf --to <receiver-address>
-```
-
-Raw equivalents without `just`:
-
-```sh
-container build --tag obscura/obscurad:dev --file Dockerfile .
-container run -d --name obscurad -p 2222:2222 -v "$PWD/.container-data":/data obscura/obscurad:dev
-```
-
 ## Quickstart
 
 The example below runs the server and two identities (a sender and a receiver) on
@@ -148,7 +99,7 @@ config file (`~/.config/obscura/config.toml`, or the OS config dir):
 
 ```sh
 obscura config set server localhost:2222
-obscura config set host_key "$(cat obscura_host_ed25519.pub)"   # or: "$(just container-hostkey)"
+obscura config set host_key "$(cat obscura_host_ed25519.pub)"   # or: "$(just hostkey)"
 
 obscura config          # show the effective config and where each value came from
 ```
@@ -331,9 +282,9 @@ just tidy       # go mod tidy
 just clean      # remove ./bin and local *.db / host keys
 ```
 
-Container tasks (macOS, Apple `container`): `just container-build`,
-`just container-run`, `just container-logs`, `just container-hostkey`,
-`just container-stop`.
+Server helpers: `just run-server` (run obscurad locally) and
+`just hostkey [path=...]` (print the pinned host public key line for a host key
+PEM, default `./obscura_host_ed25519`).
 
 ## Security notes
 
