@@ -1,8 +1,8 @@
 # Binaries
 /bin/
 /dist/
-obscura
-obscurad
+/obscura
+/obscurad
 *.exe
 
 # Local state
