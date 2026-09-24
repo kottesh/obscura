@@ -108,6 +108,8 @@ func dispatch(ctx context.Context, env *cmdEnv, cmd string, args []string) error
 		return cmdInspect(ctx, env, args)
 	case "config":
 		return cmdConfig(ctx, env, args)
+	case "known-hosts":
+		return cmdKnownHosts(ctx, env, args)
 	case "help", "-h", "--help":
 		fmt.Fprintln(env.stderr, usageText)
 		return nil
@@ -158,6 +160,13 @@ func reportError(env *cmdEnv, err error) int {
 		return exitFailure
 
 	default:
+		var che *changedHostKeyError
+		if errors.As(err, &che) {
+			env.r.Failure(fmt.Sprintf("Host key CHANGED for %s", che.server),
+				fmt.Sprintf("cached:    %s\npresented: %s\nThis may be a man-in-the-middle attack OR a legitimate server key rotation.\nThe connection was refused and the cached key was NOT changed.\nIf this change is expected, run 'obscura known-hosts forget %s' and retry.",
+					che.cachedFP, che.presentedFP, che.server))
+			return exitFailure
+		}
 		var re *sshclient.RemoteError
 		if errors.As(err, &re) {
 			detail := re.Stderr
@@ -190,6 +199,10 @@ func errorKind(err error) string {
 		var re *sshclient.RemoteError
 		if errors.As(err, &re) {
 			return "server_error"
+		}
+		var che *changedHostKeyError
+		if errors.As(err, &che) {
+			return "host_key_changed"
 		}
 		return "error"
 	}

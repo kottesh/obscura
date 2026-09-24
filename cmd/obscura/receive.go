@@ -38,10 +38,15 @@ func cmdReceive(ctx context.Context, env *cmdEnv, args []string) error {
 	var raw bool
 	fs.StringVar(&out, "o", "", "output path (default: stdout when not a TTY)")
 	fs.BoolVar(&raw, "raw", false, "write the stored encrypted bytes verbatim; no decrypt/verify")
-	if err := parseCmd(fs, args, 1, 1); err != nil {
+	// Pull the file id out first so an id starting with '-' (the storage
+	// alphabet includes '-') is never mistaken for a flag, then parse flags.
+	fileID, flagArgs := extractLeadingID(fs, args)
+	if err := parseCmd(fs, flagArgs, 0, 0); err != nil {
 		return err
 	}
-	fileID := fs.Arg(0)
+	if fileID == "" {
+		return usagef("receive: expected <file_id>")
+	}
 
 	if out == "" && stdoutIsTTY(env.stdout) {
 		return usagef("receive: refusing to write binary output to a terminal; pass -o <path>")
@@ -60,15 +65,16 @@ func cmdReceive(ctx context.Context, env *cmdEnv, args []string) error {
 	if err != nil {
 		return err
 	}
-	hostCB, err := env.g.hostKeyCallback()
+	hostCB, err := env.g.hostKeyCallback(env.r, server)
 	if err != nil {
 		return err
 	}
 
-	client, err := sshclient.New(server, self.SignPriv, hostCB)
+	client, err := sshclient.New(server, self.SignPriv, hostCB.callback)
 	if err != nil {
 		return err
 	}
+	client.SetPostDialHook(hostCB.commitHostKey)
 
 	env.r.Stage("Downloading over SSH", fmt.Sprintf("id: %s", fileID))
 	var dl bytes.Buffer

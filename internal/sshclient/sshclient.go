@@ -81,6 +81,15 @@ type Client struct {
 	// timeout bounds each dial. Zero means the x/crypto/ssh default (no dial
 	// timeout beyond the OS).
 	timeout time.Duration
+	// postDial, when non-nil, runs exactly once after the FIRST successful dial
+	// (full SSH handshake plus our public-key auth). It exists so a
+	// trust-on-first-use caller can persist a newly-observed host key only after
+	// the connection is fully established, never from inside the host-key
+	// callback. A post-dial error fails the operation. Later dials in the same
+	// Client do not re-run it (a single logical operation may open more than one
+	// connection); recording once per operation is sufficient.
+	postDial     func() error
+	postDialDone bool
 }
 
 // New builds a Client for addr ("host:port") authenticating with the caller's
@@ -119,6 +128,17 @@ func (c *Client) SetDialTimeout(d time.Duration) {
 	c.timeout = d
 }
 
+// SetPostDialHook installs a function invoked once after the first successful
+// dial (handshake and public-key auth complete). It is the trust-on-first-use
+// commit point: the caller records a newly-observed host key here rather than
+// inside the host-key callback, so nothing is persisted for a connection that
+// never authenticates. A hook that returns an error fails the operation. A nil
+// hook (the default) is a no-op.
+func (c *Client) SetPostDialHook(hook func() error) {
+	c.postDial = hook
+	c.postDialDone = false
+}
+
 // clientConfig builds the SSH client config for the given login username. The
 // username selects the server route: "" (or any non-"f:" value) is an upload
 // or list request, while "f:<file_id>" routes to download/delete (spec 6.2).
@@ -142,6 +162,13 @@ func (c *Client) dial(ctx context.Context, user string) (*gossh.Client, error) {
 	client, err := gossh.Dial("tcp", c.addr, c.clientConfig(user))
 	if err != nil {
 		return nil, fmt.Errorf("sshclient: dial %s: %w", c.addr, err)
+	}
+	if c.postDial != nil && !c.postDialDone {
+		if hookErr := c.postDial(); hookErr != nil {
+			_ = client.Close()
+			return nil, hookErr
+		}
+		c.postDialDone = true
 	}
 	return client, nil
 }

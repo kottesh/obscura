@@ -37,19 +37,26 @@ Commands:
   inspect <package_or_png>               show non-secret metadata for a local file
 
   config [set <key> <value>]             show or edit the config file
+  known-hosts list                       list trust-on-first-use pinned server keys
+  known-hosts forget <server>            forget a pinned server key (re-pins on next use)
 
 Global flags:
   --quiet             suppress progress cards; errors remain
   --no-color          plain progress without ANSI escapes
   --json              emit one JSON result on stdout; no progress cards
   --server <host:port>   Obscura server address (or OBSCURA_SERVER)
-  --host-key <value>     server host key line or path (or OBSCURA_HOST_KEY)
+  --host-key <value>     server host key line or path (or OBSCURA_HOST_KEY).
+                         Optional: when unset, trust-on-first-use pins the
+                         server key on first connection; when set, it is a hard
+                         pin and a mismatch is a hard failure.
   --config-dir <dir>     key store directory (or OBSCURA_CONFIG_DIR;
                          defaults to the user config dir)
 
 Config file (optional):
   <config-dir>/obscura/config.toml may set 'server' and 'host_key'. Precedence,
-  highest first: flag > environment > config file > built-in default.`
+  highest first: flag > environment > config file > built-in default. 'host_key'
+  is optional; without it the client uses a trust-on-first-use cache at
+  <config-dir>/obscura/known_hosts.`
 
 // globalFlags holds parsed global options shared by every subcommand.
 type globalFlags struct {
@@ -219,21 +226,75 @@ func (g globalFlags) requireServer() (string, error) {
 	return g.server, nil
 }
 
-// hostKeyCallback builds the SSH host-key verification callback from the
-// configured host key value (spec 6.1: pin the server host key). The value is
-// an SSH public key line, a known-hosts style line, or a path to a file
-// containing one of those. A missing host key is a usage error rather than a
-// silent insecure default.
-func (g globalFlags) hostKeyCallback() (gossh.HostKeyCallback, error) {
-	if g.hostKey == "" {
-		return nil, usagef("no host key configured; set --host-key, %s, or 'host_key' in %s",
-			envHostKey, configPath(g.configDir))
+// hostKeyVerifier bundles the SSH host-key verification callback with an
+// optional TOFU commit hook. The commit hook is non-nil only in TOFU mode and
+// only fires meaningfully after a successful dial (it records a first-use pin).
+// In explicit-pin mode commit is nil: the TOFU cache is neither read nor
+// written.
+type hostKeyVerifier struct {
+	callback gossh.HostKeyCallback
+	// commit records a first-use pin after a successful dial. It is safe to call
+	// even when no first-use occurred (then it is a no-op) and safe to call when
+	// nil via commitHostKey. It also emits the one-time first-use notice.
+	commit func() error
+}
+
+// commitHostKey runs v.commit if present, else is a no-op. Commands call it
+// after a successful client operation so a first-use pin is recorded only once
+// the handshake and auth fully succeeded.
+func (v hostKeyVerifier) commitHostKey() error {
+	if v.commit == nil {
+		return nil
 	}
-	pub, err := parseHostKey(g.hostKey)
+	return v.commit()
+}
+
+// hostKeyCallback builds the SSH host-key verification for this invocation
+// (spec 6.1). Precedence is per-invocation and mutually exclusive:
+//
+//   - If host_key is explicitly configured (--host-key / OBSCURA_HOST_KEY /
+//     config 'host_key'), hard-pin it with gossh.FixedHostKey. The TOFU cache
+//     is neither read nor written, and a mismatch is a hard failure.
+//   - If host_key is unset, use trust-on-first-use against
+//     <config-dir>/obscura/known_hosts. host_key is optional in this mode; the
+//     first observed key is pinned (recorded post-dial by commit), later keys
+//     must match, and a changed key aborts the connection.
+//
+// The renderer r is used to emit the one-time first-use pin notice to stderr;
+// it is suppressed in quiet and JSON modes.
+func (g globalFlags) hostKeyCallback(r *ui.Renderer, server string) (hostKeyVerifier, error) {
+	if g.hostKey != "" {
+		pub, err := parseHostKey(g.hostKey)
+		if err != nil {
+			return hostKeyVerifier{}, err
+		}
+		return hostKeyVerifier{callback: gossh.FixedHostKey(pub)}, nil
+	}
+
+	// TOFU mode: load the cache, build the capturing callback, and return a
+	// commit hook that records a first-use pin after a successful dial.
+	normServer := normalizeServer(server)
+	entries, err := loadKnownHosts(g.configDir)
 	if err != nil {
-		return nil, err
+		return hostKeyVerifier{}, err
 	}
-	return gossh.FixedHostKey(pub), nil
+	cb, res := tofuHostKeyCallback(normServer, entries)
+	commit := func() error {
+		if !res.firstUse || res.key == nil {
+			return nil
+		}
+		if err := recordKnownHost(g.configDir, normServer, hostKeyLine(res.key)); err != nil {
+			return err
+		}
+		// One-time first-use notice to stderr as a progress stage, so it is
+		// suppressed in both quiet and JSON modes (ProgressEnabled). stdout is
+		// never touched.
+		r.Stage("Host key pinned (first use)",
+			fmt.Sprintf("%s\n%s\ntrust-on-first-use; run 'obscura known-hosts forget %s' if it later changes legitimately",
+				normServer, fingerprintSHA256(res.key), normServer))
+		return nil
+	}
+	return hostKeyVerifier{callback: cb, commit: commit}, nil
 }
 
 // parseHostKey parses a host key from either a literal SSH public key/known-

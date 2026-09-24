@@ -109,3 +109,58 @@ func isBoolFlag(f *flag.Flag) bool {
 // modeJSON returns the JSON render mode; a tiny helper so command code reads as
 // "if env.g.mode == modeJSON()".
 func modeJSON() ui.Mode { return ui.ModeJSON }
+
+// extractLeadingID pulls the single required leading positional (a file id) out
+// of args so it is never interpreted as a flag, and returns the remaining flag
+// args. This is used by receive and delete, whose file id is drawn from a
+// storage alphabet that includes '-', so an id like "-abc..." must be treated
+// as the positional and not as an unknown flag.
+//
+// It walks args left to right, consulting fs to skip recognized flags and their
+// values (so "receive -o out.bin <id>" still works), and returns the first
+// token that is not a recognized flag (or the flag value being consumed) as the
+// id. A "--" terminator forces the next token to be the id. Recognized flags
+// (before and after the id) are preserved in order in the returned rest slice
+// for the normal parser. If no id token is found, id is empty and the caller's
+// count validation reports the usage error.
+func extractLeadingID(fs *flag.FlagSet, args []string) (id string, rest []string) {
+	rest = make([]string, 0, len(args))
+	i := 0
+	found := false
+	for i < len(args) {
+		a := args[i]
+		if !found && a == "--" {
+			// Everything after "--" is positional; the first is the id.
+			if i+1 < len(args) {
+				id = args[i+1]
+				rest = append(rest, args[i+2:]...)
+			}
+			return id, rest
+		}
+		name, _, hasInline := splitFlag(a)
+		trimmed := strings.TrimLeft(name, "-")
+		if def := fs.Lookup(trimmed); strings.HasPrefix(a, "-") && def != nil {
+			// A recognized flag: keep it, and consume its value token when it
+			// takes one and has no inline "=value".
+			rest = append(rest, a)
+			i++
+			if !hasInline && !isBoolFlag(def) && i < len(args) {
+				rest = append(rest, args[i])
+				i++
+			}
+			continue
+		}
+		if !found {
+			// First non-recognized-flag token is the id (even if it starts '-').
+			id = a
+			found = true
+			i++
+			continue
+		}
+		// Any further tokens are left for the parser to report (extra args or
+		// unknown flags).
+		rest = append(rest, a)
+		i++
+	}
+	return id, rest
+}

@@ -39,17 +39,18 @@ func cmdList(ctx context.Context, env *cmdEnv, args []string) error {
 	if err != nil {
 		return err
 	}
-	hostCB, err := env.g.hostKeyCallback()
+	hostCB, err := env.g.hostKeyCallback(env.r, server)
 	if err != nil {
 		return err
 	}
 
 	env.r.Stage("Listing over SSH", "querying accessible records")
 
-	client, err := sshclient.New(server, self.SignPriv, hostCB)
+	client, err := sshclient.New(server, self.SignPriv, hostCB.callback)
 	if err != nil {
 		return err
 	}
+	client.SetPostDialHook(hostCB.commitHostKey)
 	rows, err := client.List(ctx, filter)
 	if err != nil {
 		return err
@@ -110,10 +111,16 @@ func writeListingTable(env *cmdEnv, rows []sshclient.ListRow) {
 // mode emits one confirmation object.
 func cmdDelete(ctx context.Context, env *cmdEnv, args []string) error {
 	fs := newFlagSet("delete")
-	if err := parseCmd(fs, args, 1, 1); err != nil {
+	// The file id is the sole positional; pull it out before flag parsing so an
+	// id starting with '-' (a valid storage-alphabet character) is not mistaken
+	// for a flag.
+	fileID, flagArgs := extractLeadingID(fs, args)
+	if err := parseCmd(fs, flagArgs, 0, 0); err != nil {
 		return err
 	}
-	fileID := fs.Arg(0)
+	if fileID == "" {
+		return usagef("delete: expected <file_id>")
+	}
 
 	self, err := keystore.Load(env.g.configDir)
 	if err != nil {
@@ -123,17 +130,18 @@ func cmdDelete(ctx context.Context, env *cmdEnv, args []string) error {
 	if err != nil {
 		return err
 	}
-	hostCB, err := env.g.hostKeyCallback()
+	hostCB, err := env.g.hostKeyCallback(env.r, server)
 	if err != nil {
 		return err
 	}
 
 	env.r.Stage("Deleting over SSH", fmt.Sprintf("id: %s", fileID))
 
-	client, err := sshclient.New(server, self.SignPriv, hostCB)
+	client, err := sshclient.New(server, self.SignPriv, hostCB.callback)
 	if err != nil {
 		return err
 	}
+	client.SetPostDialHook(hostCB.commitHostKey)
 	if err := client.Delete(ctx, fileID); err != nil {
 		return err
 	}

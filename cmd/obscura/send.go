@@ -55,7 +55,7 @@ func cmdSend(ctx context.Context, env *cmdEnv, args []string) error {
 	if err != nil {
 		return err
 	}
-	hostCB, err := env.g.hostKeyCallback()
+	hostCB, err := env.g.hostKeyCallback(env.r, server)
 	if err != nil {
 		return err
 	}
@@ -90,10 +90,11 @@ func cmdSend(ctx context.Context, env *cmdEnv, args []string) error {
 
 	env.r.Stage("Uploading over SSH", fmt.Sprintf("receiver: %s", shortHex(addr.UserID[:])))
 
-	client, err := sshclient.New(server, self.SignPriv, hostCB)
+	client, err := sshclient.New(server, self.SignPriv, hostCB.callback)
 	if err != nil {
 		return err
 	}
+	client.SetPostDialHook(hostCB.commitHostKey)
 	fileID, err := client.Upload(ctx, bytes.NewReader(body), to, name, carrierType)
 	if err != nil {
 		return err

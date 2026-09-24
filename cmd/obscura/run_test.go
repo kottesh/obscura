@@ -479,7 +479,6 @@ func extractSeed(t *testing.T, stderr string) string {
 }
 
 // TestRunInspect checks inspect prints non-secret metadata for a local package
-// and never reaches the server.
 func TestRunInspect(t *testing.T) {
 	server, hostKey := testServer(t)
 	dirA, _ := initIdentity(t, server, hostKey)
@@ -522,4 +521,113 @@ func sealForTest(t *testing.T, address string, payload []byte) []byte {
 		t.Fatal(err)
 	}
 	return pkg
+}
+
+// TestReceiveDeleteDashLeadingID is a regression test for a file id that begins
+// with '-' (the storage id alphabet includes '-'). Such an id must be treated
+// as the positional file id, never parsed as an unknown flag. It drives
+// cmdReceive and cmdDelete directly with a synthetic dash-leading id and
+// asserts the id reaches the server (surfacing as ErrNotFound, not a usage
+// error about an unknown flag).
+func TestReceiveDeleteDashLeadingID(t *testing.T) {
+	server, hostKey := testServer(t)
+	dir, _ := initIdentity(t, server, hostKey)
+
+	// A well-formed-length id from the storage alphabet that starts with '-'.
+	const dashID = "-bcDEF0123456789"
+	if len(dashID) != 16 {
+		t.Fatalf("test id must be 16 chars, got %d", len(dashID))
+	}
+
+	// receive: the id must be treated as the positional, so the failure is a
+	// "file not found" from the server, not a usage error about an unknown flag.
+	outPath := filepath.Join(t.TempDir(), "dash.bin")
+	recv := runCLI(t, server, hostKey, nil, "--config-dir", dir, "receive", dashID, "-o", outPath)
+	if recv.code == exitOK {
+		t.Fatal("receive of unknown dash-leading id should fail")
+	}
+	if strings.Contains(recv.stderr, "flag provided but not defined") ||
+		strings.Contains(recv.stderr, "not defined") {
+		t.Errorf("dash-leading id was parsed as a flag: %q", recv.stderr)
+	}
+	if !strings.Contains(recv.stderr, "file not found") {
+		t.Errorf("receive dash-leading id stderr should be 'file not found', got %q", recv.stderr)
+	}
+
+	// The same id with -o BEFORE the id must also work (flag/positional order).
+	recv2 := runCLI(t, server, hostKey, nil, "--config-dir", dir, "receive", "-o", outPath, dashID)
+	if recv2.code == exitOK {
+		t.Fatal("receive (flag-first) of unknown dash-leading id should fail")
+	}
+	if strings.Contains(recv2.stderr, "not defined") {
+		t.Errorf("dash-leading id (flag-first) parsed as a flag: %q", recv2.stderr)
+	}
+	if !strings.Contains(recv2.stderr, "file not found") {
+		t.Errorf("receive (flag-first) stderr should be 'file not found', got %q", recv2.stderr)
+	}
+
+	// delete: same treatment; a dash-leading id reaches the server as not-found.
+	del := runCLI(t, server, hostKey, nil, "--config-dir", dir, "delete", dashID)
+	if del.code == exitOK {
+		t.Fatal("delete of unknown dash-leading id should fail")
+	}
+	if strings.Contains(del.stderr, "not defined") {
+		t.Errorf("delete dash-leading id parsed as a flag: %q", del.stderr)
+	}
+	if !strings.Contains(del.stderr, "file not found") {
+		t.Errorf("delete dash-leading id stderr should be 'file not found', got %q", del.stderr)
+	}
+}
+
+// TestSendReceiveDeleteRoundTripDashID proves a dash-leading id produced by a
+// real upload round-trips through receive and delete. It forces the send path
+// to yield a dash-leading id by retrying uploads until one is produced, so the
+// test exercises a genuine server-issued id, not only a synthetic one.
+func TestSendReceiveDeleteRoundTripDashID(t *testing.T) {
+	server, hostKey := testServer(t)
+	dirA, _ := initIdentity(t, server, hostKey)
+	dirB, addrB := initIdentity(t, server, hostKey)
+
+	content := []byte("dash-id round trip\x00\xff")
+	src := filepath.Join(t.TempDir(), "dash-src.bin")
+	if err := os.WriteFile(src, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Upload repeatedly until the server issues a dash-leading id (~1/16 each).
+	var fileID string
+	for i := 0; i < 200; i++ {
+		res := runCLI(t, server, hostKey, nil, "--config-dir", dirA, "send", src, "--to", addrB)
+		if res.code != exitOK {
+			t.Fatalf("send exit=%d stderr=%s", res.code, res.stderr)
+		}
+		id := strings.TrimSpace(res.stdout)
+		if strings.HasPrefix(id, "-") {
+			fileID = id
+			break
+		}
+	}
+	if fileID == "" {
+		t.Skip("no dash-leading id produced in 200 uploads; skipping (statistically unlikely)")
+	}
+
+	// receive the dash-leading id: must recover the plaintext byte-exactly.
+	outPath := filepath.Join(t.TempDir(), "dash-recovered.bin")
+	recv := runCLI(t, server, hostKey, nil, "--config-dir", dirB, "receive", fileID, "-o", outPath)
+	if recv.code != exitOK {
+		t.Fatalf("receive dash id exit=%d stderr=%s", recv.code, recv.stderr)
+	}
+	got, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, content) {
+		t.Fatalf("dash-id round trip bytes differ:\n got %q\nwant %q", got, content)
+	}
+
+	// delete the dash-leading id as owner.
+	del := runCLI(t, server, hostKey, nil, "--config-dir", dirA, "delete", fileID)
+	if del.code != exitOK {
+		t.Fatalf("delete dash id exit=%d stderr=%s", del.code, del.stderr)
+	}
 }
