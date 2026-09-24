@@ -1,0 +1,22 @@
+# Binaries
+/bin/
+/dist/
+obscura
+obscurad
+*.exe
+
+# Local state
+*.db
+*.db-shm
+*.db-wal
+/testdata/tmp/
+
+# Host keys and identities (never commit secrets)
+*.seed
+id_ed25519*
+host_key*
+
+# Go
+*.test
+*.out
+/vendor/
