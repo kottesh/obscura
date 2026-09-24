@@ -14,11 +14,13 @@ import (
 	gossh "golang.org/x/crypto/ssh"
 )
 
-// Environment variable names for server address and host key (spec 7/8.4).
-// Flags take precedence over these.
+// Environment variable names for server address, host key, and config dir
+// (spec 7/8.4). Flags take precedence over these, and these take precedence
+// over the optional config file.
 const (
-	envServer  = "OBSCURA_SERVER"
-	envHostKey = "OBSCURA_HOST_KEY"
+	envServer    = "OBSCURA_SERVER"
+	envHostKey   = "OBSCURA_HOST_KEY"
+	envConfigDir = "OBSCURA_CONFIG_DIR"
 )
 
 // usageText is the top-level usage string shown for help and usage errors.
@@ -34,13 +36,20 @@ Commands:
   delete <file_id>                       delete an owned server record
   inspect <package_or_png>               show non-secret metadata for a local file
 
+  config [set <key> <value>]             show or edit the config file
+
 Global flags:
   --quiet             suppress progress cards; errors remain
   --no-color          plain progress without ANSI escapes
   --json              emit one JSON result on stdout; no progress cards
   --server <host:port>   Obscura server address (or OBSCURA_SERVER)
   --host-key <value>     server host key line or path (or OBSCURA_HOST_KEY)
-  --config-dir <dir>     key store directory (defaults to the user config dir)`
+  --config-dir <dir>     key store directory (or OBSCURA_CONFIG_DIR;
+                         defaults to the user config dir)
+
+Config file (optional):
+  <config-dir>/obscura/config.toml may set 'server' and 'host_key'. Precedence,
+  highest first: flag > environment > config file > built-in default.`
 
 // globalFlags holds parsed global options shared by every subcommand.
 type globalFlags struct {
@@ -59,10 +68,10 @@ type globalFlags struct {
 // the same spelling (e.g. a file path) are never swallowed. Unknown flags in
 // the global position are a usage error.
 func parseGlobal(args []string, getenv func(string) string) (globalFlags, []string, error) {
-	g := globalFlags{
-		server:  getenv(envServer),
-		hostKey: getenv(envHostKey),
-	}
+	g := globalFlags{}
+	// Track whether server/host_key came from flags so config-file values only
+	// fill genuinely-unset fields (flag > env > file precedence).
+	var serverFromFlag, hostKeyFromFlag bool
 
 	i := 0
 	for i < len(args) {
@@ -89,6 +98,7 @@ func parseGlobal(args []string, getenv func(string) string) (globalFlags, []stri
 				return globalFlags{}, nil, err
 			}
 			g.server, i = v, next
+			serverFromFlag = true
 			continue
 		case "--host-key", "-host-key":
 			v, next, err := flagValue(args, i, name, inlineVal, hasInline)
@@ -96,6 +106,7 @@ func parseGlobal(args []string, getenv func(string) string) (globalFlags, []stri
 				return globalFlags{}, nil, err
 			}
 			g.hostKey, i = v, next
+			hostKeyFromFlag = true
 			continue
 		case "--config-dir", "-config-dir":
 			v, next, err := flagValue(args, i, name, inlineVal, hasInline)
@@ -112,12 +123,40 @@ func parseGlobal(args []string, getenv func(string) string) (globalFlags, []stri
 
 	g.mode = resolveMode(g)
 
+	// Resolve the config directory FIRST (flag > env > default) because it
+	// determines where the optional config file lives. --config-dir itself can
+	// never come from the config file.
 	if g.configDir == "" {
-		dir, err := keystore.DefaultDir()
-		if err != nil {
-			return globalFlags{}, nil, err
+		if env := getenv(envConfigDir); env != "" {
+			g.configDir = env
+		} else {
+			dir, err := keystore.DefaultDir()
+			if err != nil {
+				return globalFlags{}, nil, err
+			}
+			g.configDir = dir
 		}
-		g.configDir = dir
+	}
+
+	// Apply env after flags: env fills fields not set by a flag.
+	if !serverFromFlag {
+		g.server = getenv(envServer)
+	}
+	if !hostKeyFromFlag {
+		g.hostKey = getenv(envHostKey)
+	}
+
+	// Load the optional config file and fill server/host_key only if still empty
+	// after flag+env. A malformed file is an actionable usage error.
+	cfg, _, err := loadConfig(g.configDir)
+	if err != nil {
+		return globalFlags{}, nil, err
+	}
+	if g.server == "" {
+		g.server = cfg.server
+	}
+	if g.hostKey == "" {
+		g.hostKey = cfg.hostKey
 	}
 
 	return g, args[i:], nil
@@ -174,7 +213,8 @@ func stderrFile(w io.Writer) *os.File {
 // configured via flag or environment.
 func (g globalFlags) requireServer() (string, error) {
 	if g.server == "" {
-		return "", usagef("no server configured; set --server or %s", envServer)
+		return "", usagef("no server configured; set --server, %s, or 'server' in %s",
+			envServer, configPath(g.configDir))
 	}
 	return g.server, nil
 }
@@ -186,7 +226,8 @@ func (g globalFlags) requireServer() (string, error) {
 // silent insecure default.
 func (g globalFlags) hostKeyCallback() (gossh.HostKeyCallback, error) {
 	if g.hostKey == "" {
-		return nil, usagef("no host key configured; set --host-key or %s", envHostKey)
+		return nil, usagef("no host key configured; set --host-key, %s, or 'host_key' in %s",
+			envHostKey, configPath(g.configDir))
 	}
 	pub, err := parseHostKey(g.hostKey)
 	if err != nil {

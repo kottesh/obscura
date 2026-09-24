@@ -186,6 +186,7 @@ Commands:
   receive <file_id> [-o <path>]          download, decrypt, and verify a file
   delete <file_id>                       delete an owned server record
   inspect <package_or_png>               show non-secret metadata for a local file
+  config [set <key> <value>]             show or edit the config file
 
 Global flags:
   --quiet                suppress progress cards; errors remain
@@ -193,11 +194,56 @@ Global flags:
   --json                 emit one JSON result on stdout; no progress cards
   --server <host:port>   Obscura server address (or OBSCURA_SERVER)
   --host-key <value>     server host key line or path (or OBSCURA_HOST_KEY)
-  --config-dir <dir>     key store directory (defaults to the user config dir)
+  --config-dir <dir>     key store directory (or OBSCURA_CONFIG_DIR;
+                         defaults to the user config dir)
 ```
 
 `--host-key` accepts an `authorized_keys`-style line, a `known_hosts`-style line,
 or a path to a file containing one of those.
+
+### Config file
+
+An optional config file lets you avoid repeating `--server` / `--host-key` /
+`--config-dir` on every invocation. It lives alongside the seed at:
+
+- Linux: `~/.config/obscura/config.toml`
+- macOS: `~/Library/Application Support/obscura/config.toml`
+
+more precisely `<config-dir>/obscura/config.toml`. The file is optional; its
+absence is not an error. It is a small hand-edited file with two optional keys:
+
+```toml
+# obscura config
+server = "host.example:2222"
+host_key = "ssh-ed25519 AAAA..."   # or a path to a file with one such line
+```
+
+Supported syntax: blank lines, `#` comments, and `key = value` with optional
+surrounding whitespace and optional double-quotes around the value. `host_key`
+accepts the same forms as the `--host-key` flag (an `authorized_keys`/
+`known_hosts` line, or a path to a file containing one). Unknown keys and
+malformed lines are a hard error that names the file and line, so typos are
+caught rather than silently ignored.
+
+**Precedence (highest wins):** command-line flag > environment variable
+(`OBSCURA_SERVER` / `OBSCURA_HOST_KEY`) > config file > built-in default. This
+applies to `server` and `host_key`. `--config-dir` itself cannot come from the
+config file (it determines where the file lives); it resolves as flag >
+`OBSCURA_CONFIG_DIR` env > the default user config dir.
+
+Manage the file with the `config` subcommand:
+
+```text
+obscura config                     # print the effective config and each value's source
+obscura config set server host:2222
+obscura config set host_key "ssh-ed25519 AAAA..."
+```
+
+`obscura config set` writes `<config-dir>/obscura/config.toml` (directory `0700`,
+file `0600`, atomic temp+rename). It preserves the other known key but rewrites
+the file with only the recognized keys, so hand-written comments are not
+preserved. `obscura config` never prints secrets (the seed and private keys are
+never touched); `server` and `host_key` are not secret.
 
 ### Output discipline
 

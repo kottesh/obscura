@@ -106,6 +106,8 @@ func dispatch(ctx context.Context, env *cmdEnv, cmd string, args []string) error
 		return cmdDelete(ctx, env, args)
 	case "inspect":
 		return cmdInspect(ctx, env, args)
+	case "config":
+		return cmdConfig(ctx, env, args)
 	case "help", "-h", "--help":
 		fmt.Fprintln(env.stderr, usageText)
 		return nil
