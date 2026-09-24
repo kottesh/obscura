@@ -67,8 +67,8 @@ container-build:
 # Run the server container detached, publishing :2222 and persisting state under
 # ./.container-data (SQLite DB + generated host key survive restarts).
 container-run: container-build
-    mkdir -p {{data}}
-    container run -d --name obscurad -p 2222:2222 -v {{data}}:/data {{image}}
+    mkdir -p "{{data}}"
+    container run -d --name obscurad -p 2222:2222 -v "{{data}}":/data {{image}}
     @container list | grep obscurad || true
 
 # Tail the server container logs.
@@ -77,9 +77,8 @@ container-logs:
 
 # Print the pinned host public key line clients need for --host-key.
 container-hostkey:
-    @go run ./cmd/obscurad -help >/dev/null 2>&1 || true
-    @test -f {{data}}/obscura_host_ed25519 || (echo "no host key yet; run 'just container-run' first" && exit 1)
-    @go run ./tools/hostpub {{data}}/obscura_host_ed25519
+    @test -f "{{data}}/obscura_host_ed25519" || (echo "no host key yet; run 'just container-run' first" && exit 1)
+    @go run ./tools/hostpub "{{data}}/obscura_host_ed25519"
 
 # Stop and remove the server container (state under ./.container-data is kept).
 container-stop:
