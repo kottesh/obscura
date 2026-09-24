@@ -116,8 +116,12 @@ unverified host key.
 
 ### 2. Create identities
 
+Each user has one identity. Use a separate `--config-dir` per identity only when
+running several on one machine (the demo below); normally you just run `obscura`
+and it uses the default config dir.
+
 ```sh
-# Receiver (use a separate config dir per identity in this single-machine demo):
+# Receiver:
 obscura --config-dir ~/.config/obscura-recv init
 # -> prints the recovery seed ONCE on stderr (save it) and the public address on stdout
 
@@ -125,7 +129,7 @@ obscura --config-dir ~/.config/obscura-recv init
 obscura --config-dir ~/.config/obscura-send init
 ```
 
-Print an address again at any time:
+Print an address again at any time (the receiver gives this string to the sender):
 
 ```sh
 obscura --config-dir ~/.config/obscura-recv address
@@ -137,37 +141,61 @@ Recover an identity from its seed on a new machine:
 obscura init --recover <seed-string>
 ```
 
-### 3. Send a file
+### 3. Save the server details once (no more connection flags)
+
+Instead of passing `--server` and `--host-key` on every command, store them in the
+config file (`~/.config/obscura/config.toml`, or the OS config dir):
 
 ```sh
-obscura \
-  --server localhost:2222 \
-  --host-key "$(cat obscura_host_ed25519.pub)" \
-  --config-dir ~/.config/obscura-send \
-  send ./report.pdf --to <receiver-address> --name report.pdf
+obscura config set server localhost:2222
+obscura config set host_key "$(cat obscura_host_ed25519.pub)"   # or: "$(just container-hostkey)"
+
+obscura config          # show the effective config and where each value came from
+```
+
+`host_key` is the **server's** host public key (an `ssh-ed25519 AAAA...` line or a
+path to a file with one), which the client pins — not your own key. After this,
+every command below is just `obscura <command>` with no connection flags.
+
+### 4. Send a file
+
+```sh
+obscura send ./report.pdf --to <receiver-address> --name report.pdf
 # -> prints the file id on stdout
 ```
 
 Hide the encrypted package in a generated PNG carrier instead:
 
 ```sh
-obscura ... send ./report.pdf --to <receiver-address> --png
+obscura send ./report.pdf --to <receiver-address> --png
 ```
 
-### 4. List, receive, delete
+> Only the **intended receiver** (the identity behind `--to`) can decrypt or
+> extract the file. The sender cannot `receive` their own upload back as
+> plaintext — the encryption and (for `--png`) the stego positions are keyed to
+> the receiver. Sender and receiver must also point at the **same server**; a file
+> id only exists on the server that received it.
+
+### 5. List, receive, delete
 
 ```sh
 # Receiver lists what was shared with them:
-obscura ... --config-dir ~/.config/obscura-recv list --received
+obscura list --received
 
 # Receiver downloads, decrypts, and verifies to a path:
-obscura ... --config-dir ~/.config/obscura-recv receive <file_id> -o ./report.pdf
+obscura receive <file_id> -o ./report.pdf
+
+# Fetch the stored bytes verbatim (encrypted package or stego PNG), no decrypt:
+obscura receive <file_id> -o ./stored.bin --raw
 
 # Owner (sender) deletes the server copy:
-obscura ... --config-dir ~/.config/obscura-send delete <file_id>
+obscura delete <file_id>
 ```
 
-### 5. Inspect a local package or PNG
+(When running multiple identities on one machine, prefix each command with
+`--config-dir ~/.config/obscura-recv` or `...-send` as in step 2.)
+
+### 6. Inspect a local package or PNG
 
 ```sh
 obscura inspect ./encrypted.pkg    # prints non-secret metadata only
@@ -248,8 +276,8 @@ never touched); `server` and `host_key` are not secret.
 ### Output discipline
 
 - **stdout** carries only the machine result: the address, the file id, the
-  listing, inspect metadata, or (for `receive` without `-o`) the raw decrypted
-  bytes. It is never decorated.
+  listing, inspect metadata, or (for `receive` without `-o`) the decrypted bytes
+  (or the stored bytes with `--raw`). It is never decorated.
 - **stderr** carries all progress cards, diagnostics, and errors.
 - `--json` emits exactly one JSON object on stdout (including a structured error
   object on failure) and no cards anywhere.
@@ -318,6 +346,9 @@ Container tasks (macOS, Apple `container`): `just container-build`,
   specialist analysis, and is not robust to pixel changes.
 - Deleting a file from the server does not revoke a copy a receiver already
   downloaded.
+- Only the intended receiver can decrypt or extract a file; the sender cannot
+  recover their own upload as plaintext. `receive --raw` returns the stored
+  ciphertext/stego bytes verbatim and applies no decryption or verification.
 
 ## Status
 
