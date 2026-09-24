@@ -10,6 +10,7 @@
 *.db-shm
 *.db-wal
 /testdata/tmp/
+/.container-data/
 
 # Host keys and identities (never commit secrets)
 *.seed
