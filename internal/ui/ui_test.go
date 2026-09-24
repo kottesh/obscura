@@ -25,8 +25,8 @@ func TestCardContentAndNoANSI(t *testing.T) {
 		},
 		{
 			name:   "success",
-			call:   func(r *Renderer) { r.Success("File shared ✓", "id: Qm8kP2xA") },
-			title:  "File shared ✓",
+			call:   func(r *Renderer) { r.Success("File shared", "id: Qm8kP2xA") },
+			title:  "File shared",
 			detail: "id: Qm8kP2xA",
 		},
 		{
@@ -37,8 +37,8 @@ func TestCardContentAndNoANSI(t *testing.T) {
 		},
 		{
 			name:   "failure",
-			call:   func(r *Renderer) { r.Failure("Unable to decrypt ⛔", "Authentication failed.") },
-			title:  "Unable to decrypt ⛔",
+			call:   func(r *Renderer) { r.Failure("Unable to decrypt", "Authentication failed.") },
+			title:  "Unable to decrypt",
 			detail: "Authentication failed.",
 		},
 		{
@@ -78,9 +78,9 @@ func TestColorModeEmitsANSI(t *testing.T) {
 		call func(r *Renderer)
 	}{
 		{"stage", func(r *Renderer) { r.Stage("Encrypting", "detail") }},
-		{"success", func(r *Renderer) { r.Success("Done ✓", "detail") }},
+		{"success", func(r *Renderer) { r.Success("Done", "detail") }},
 		{"warn", func(r *Renderer) { r.Warn("Warning", "detail") }},
-		{"failure", func(r *Renderer) { r.Failure("Failed ⛔", "detail") }},
+		{"failure", func(r *Renderer) { r.Failure("Failed", "detail") }},
 		{"crypto", func(r *Renderer) { r.Crypto("Verifying", "detail") }},
 	}
 
@@ -107,17 +107,17 @@ func TestQuietMode(t *testing.T) {
 	r := NewForTest(&buf, ModeQuiet, false)
 
 	r.Stage("Encrypting", "detail")
-	r.Success("File shared ✓", "id")
+	r.Success("File shared", "id")
 	r.Crypto("Verifying", "detail")
 	if buf.Len() != 0 {
 		t.Errorf("quiet mode emitted progress output: %q", buf.String())
 	}
 
-	r.Failure("Unable to decrypt ⛔", "Authentication failed.")
+	r.Failure("Unable to decrypt", "Authentication failed.")
 	if buf.Len() == 0 {
 		t.Error("quiet mode suppressed failure card")
 	}
-	if !strings.Contains(buf.String(), "Unable to decrypt ⛔") {
+	if !strings.Contains(buf.String(), "Unable to decrypt") {
 		t.Errorf("quiet failure missing title: %q", buf.String())
 	}
 
@@ -134,10 +134,10 @@ func TestJSONModeSuppressesAll(t *testing.T) {
 	r := NewForTest(&buf, ModeJSON, false)
 
 	r.Stage("Encrypting", "detail")
-	r.Success("File shared ✓", "id")
+	r.Success("File shared", "id")
 	r.Crypto("Verifying", "detail")
 	r.Warn("Warning", "detail")
-	r.Failure("Unable to decrypt ⛔", "Authentication failed.")
+	r.Failure("Unable to decrypt", "Authentication failed.")
 
 	if buf.Len() != 0 {
 		t.Errorf("JSON mode emitted card output: %q", buf.String())
